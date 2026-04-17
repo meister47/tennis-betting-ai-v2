@@ -1,0 +1,68 @@
+{
+  "fonbet": {
+    "name": "Fonbet",
+    "country": "Russia",
+    "url": "https://www.fonbet.ru",
+    "tennisUrl": "https://www.fonbet.ru/sports/tennis",
+    "api": {
+      "type": "web_scraping",
+      "rateLimit": 1000,
+      "maxRetries": 3
+    },
+    "markets": {
+      "moneyline": "П1/П2",
+      "handicap": "Фора",
+      "total": "Тотал",
+      "sets": "Сеты",
+      "games": "Геймы"
+    },
+    "oddsFormat": "decimal",
+    "updateFrequency": 300,
+    "enabled": true,
+    "priority": 1
+  },
+  "bet365": {
+    "name": "Bet365",
+    "country": "International",
+    "url": "https://www.bet365.com",
+    "tennisUrl": "https://www.bet365.com/#/AC/B1/C1/D8/E{}",
+    "api": {
+      "type": "web_scraping",
+      "rateLimit": 2000,
+      "maxRetries": 3
+    },
+    "markets": {
+      "moneyline": "Match Winner",
+      "handicap": "Handicap",
+      "total": "Total Games",
+      "sets": "Set Betting",
+      "games": "Game Handicap"
+    },
+    "oddsFormat": "decimal",
+    "updateFrequency": 180,
+    "enabled": false,
+    "priority": 2
+  },
+  "onexbet": {
+    "name": "1xBet",
+    "country": "Russia",
+    "url": "https://1xbet.ru",
+    "tennisUrl": "https://1xbet.ru/en/live/Tennis/",
+    "api": {
+      "type": "web_scraping",
+      "rateLimit": 1500,
+      "maxRetries": 3
+    },
+    "markets": {
+      "moneyline": "Победитель матча",
+      "handicap": "Фора",
+      "total": "Тотал",
+      "sets": "Счет по сетам",
+      "games": "Фора по геймам"
+    },
+    "oddsFormat": "decimal",
+    "updateFrequency": 240,
+    "enabled": false,
+    "priority": 3
+  }
+}

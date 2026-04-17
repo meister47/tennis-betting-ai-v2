@@ -1,0 +1,117 @@
+{
+  "id": "real_1",
+  "player1": "Reilly Opelka",
+  "player2": "Ilya Quinn",
+  "tournament": "ATP Barcelona",
+  "startTime": "2026-04-13T13:57:07.609Z",
+  "coefficients": {
+    "moneyline": {
+      "player1": 1.5,
+      "player2": 2.6
+    },
+    "handicap": [
+      {
+        "player": "player2",
+        "handicap": "+1.5",
+        "value": 1.18
+      },
+      {
+        "player": "player2",
+        "handicap": "+2.5",
+        "value": 1.25
+      },
+      {
+        "player": "player1",
+        "handicap": "-0.5",
+        "value": 1.52
+      },
+      {
+        "player": "player1",
+        "handicap": "-1.5",
+        "value": 1.63
+      }
+    ],
+    "total_sets": [
+      {
+        "direction": "over",
+        "total": "2.5",
+        "value": 2.25
+      },
+      {
+        "direction": "under",
+        "total": "2.5",
+        "value": 1.6
+      }
+    ]
+  },
+  "systemFormat": {
+    "id": "real_1",
+    "player1": "Reilly Opelka",
+    "player2": "Ilya Quinn",
+    "tournament": "ATP Barcelona",
+    "start_time": "2026-04-13T13:57:07.609Z",
+    "odds": {
+      "moneyline": {
+        "player1": {
+          "odds": 1.5,
+          "implied_probability": 0.6667,
+          "is_favorite": true
+        },
+        "player2": {
+          "odds": 2.6,
+          "implied_probability": 0.3846,
+          "is_favorite": false
+        },
+        "favorite_odds": 1.5,
+        "underdog_odds": 2.6,
+        "margin": "5.13"
+      },
+      "handicap": [
+        {
+          "player": "player2",
+          "handicap": 1.5,
+          "handicap_direction": "plus",
+          "odds": 1.18,
+          "implied_probability": 0.8474576271186441
+        },
+        {
+          "player": "player2",
+          "handicap": 2.5,
+          "handicap_direction": "plus",
+          "odds": 1.25,
+          "implied_probability": 0.8
+        },
+        {
+          "player": "player1",
+          "handicap": 0.5,
+          "handicap_direction": "minus",
+          "odds": 1.52,
+          "implied_probability": 0.6578947368421053
+        },
+        {
+          "player": "player1",
+          "handicap": 1.5,
+          "handicap_direction": "minus",
+          "odds": 1.63,
+          "implied_probability": 0.6134969325153374
+        }
+      ],
+      "total_sets": [
+        {
+          "total": 2.5,
+          "direction": "over",
+          "odds": 2.25,
+          "implied_probability": 0.4444444444444444
+        },
+        {
+          "total": 2.5,
+          "direction": "under",
+          "odds": 1.6,
+          "implied_probability": 0.625
+        }
+      ]
+    },
+    "source": "fonbet",
+    "timestamp": "2026-04-13T11:57:07.609Z"
+  }
+}

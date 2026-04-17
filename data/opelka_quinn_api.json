@@ -1,0 +1,29 @@
+{
+  "event": {
+    "id": 64129853,
+    "parentId": 64129838,
+    "sortOrder": "Aasm8g51oW0u++Dc1ocgi6tL1ocgx",
+    "level": 3,
+    "num": 36439,
+    "sportId": 11781,
+    "kind": 91,
+    "rootKind": 80,
+    "team1Id": 628532,
+    "team2Id": 0,
+    "team1": "Куинн Д",
+    "name": "",
+    "startTime": 1776126600,
+    "place": "line",
+    "priority": 5,
+    "specialTableId": 4
+  },
+  "coefficients": {
+    "moneyline": {
+      "player1": null,
+      "player2": null
+    },
+    "handicap": [],
+    "total_sets": []
+  },
+  "timestamp": "2026-04-13T18:49:27.457Z"
+}

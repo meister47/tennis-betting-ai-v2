@@ -1,0 +1,49 @@
+{
+  "TOURNAMENT_RISK": {
+    "ATP Barcelona Open": "low",
+    "ATP Munich": "medium", 
+    "WTA Stuttgart Open": "low",
+    "ATP Monte Carlo Masters": "low",
+    "ATP Houston": "medium",
+    "ATP Estoril Open": "low",
+    "ATP Marrakech": "medium",
+    "WTA Bogota": "high",
+    "ATP Madrid Masters": "low",
+    "ATP Rome Masters": "low",
+    "ATP French Open": "medium",
+    "WTA French Open": "medium",
+    "ATP Wimbledon": "medium",
+    "WTA Wimbledon": "medium",
+    "ATP US Open": "medium",
+    "WTA US Open": "medium",
+    "ATP Australian Open": "medium",
+    "WTA Australian Open": "medium",
+    "ATP Masters 1000": "low",
+    "ATP 500": "medium",
+    "ATP 250": "medium",
+    "WTA Premier": "medium",
+    "WTA International": "high",
+    "Challenger": "high",
+    "Futures": "high",
+    "ITF": "high"
+  },
+  
+  "TOURNAMENT_MULTIPLIERS": {
+    "Masters 1000": 1.1,
+    "ATP 500": 1.0,
+    "ATP 250": 1.0,
+    "Grand Slam": 0.85,
+    "WTA Premier": 1.0,
+    "WTA International": 0.9,
+    "Challenger": 0.8,
+    "Futures": 0.7,
+    "ITF": 0.7
+  },
+  
+  "SURFACE_MULTIPLIERS": {
+    "Hard": 1.0,
+    "Clay": 1.0,
+    "Grass": 1.15,
+    "Carpet": 0.9
+  }
+}

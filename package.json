@@ -1,0 +1,33 @@
+{
+  "name": "tennis-betting-ai",
+  "version": "1.0.0",
+  "description": "AI-powered tennis betting analysis system with real odds integration and historical optimizations",
+  "main": "scripts/real-today-analysis-min-odds.js",
+  "scripts": {
+    "analyze": "node scripts/real-today-analysis-min-odds.js",
+    "test": "node scripts/test-new-system.js",
+    "update-cache": "node scripts/morning-cache-update.js",
+    "validate": "node scripts/validate-odds-config.js",
+    "monitor": "node scripts/odds-cache-manager.js status"
+  },
+  "keywords": [
+    "tennis",
+    "betting",
+    "ai",
+    "odds",
+    "sports-analytics",
+    "value-betting"
+  ],
+  "author": "Anton Shatunov",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/meister47/tennis-betting-ai.git"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
