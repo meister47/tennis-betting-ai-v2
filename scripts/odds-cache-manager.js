@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
 /**
- * The Odds API Cache Manager
+ * The Odds API Cache Manager - Optimized Version
  * Централизованный кэш для оптимизации запросов
- * Сохраняет данные на 24 часа
+ * Дифференцированные TTL и singleton паттерн
  */
 
-// ================== НОВОЕ: ИНИЦИАЛИЗАЦИЯ ЛОГГЕРА ==================
+// ================== ИНИЦИАЛИЗАЦИЯ ЛОГГЕРА ==================
 const Logger = require('../src/logger');
 const logger = new Logger('cache');
 
-// ================== НАСТРОЙКА РЕЖИМА ЛОГГИРОВАНИЯ ==================
-const USE_JSON_LOGGER = true; // Флаг для быстрого отключения/включения
+// ================== ИМПОРТ КОНФИГУРАЦИИ ==================
+const CACHE_CONFIG = require('../config/cache-config');
 
 const fs = require('fs');
 const https = require('https');
@@ -22,15 +22,11 @@ if (!API_KEY) {
   logger.error('THE_ODDS_API_KEY не установлен в переменных окружения', {
     error: 'Создайте файл .env.local с ключом (см. SETUP_SECURITY.md)'
   });
-  /* БЫЛО:
-  console.error('❌ THE_ODDS_API_KEY не установлен в переменных окружения');
-  console.error('   Создайте файл .env.local с ключом (см. SETUP_SECURITY.md)');
-  */
   process.exit(1);
 }
+
 const CACHE_DIR = path.join(__dirname, '../cache');
 const CACHE_FILE = path.join(CACHE_DIR, 'odds-cache.json');
-const CACHE_TTL_HOURS = 24; // 24 часа кэширования
 
 // Убедимся, что директория кэша существует
 if (!fs.existsSync(CACHE_DIR)) {
@@ -39,95 +35,395 @@ if (!fs.existsSync(CACHE_DIR)) {
 
 class OddsCacheManager {
   constructor() {
-    // FIX: Защита от undefined кэша
-    if (!this.cache) this.cache = {};
-    this.cache = this.loadCache();
-  }
-
-  // Загрузка кэша из файла
-  loadCache() {
-    try {
-      if (fs.existsSync(CACHE_FILE)) {
-        const data = fs.readFileSync(CACHE_FILE, 'utf8');
-        const cache = JSON.parse(data);
-        
-        // Проверяем актуальность кэша
-        const cacheAgeHours = (Date.now() - cache.timestamp) / (1000 * 60 * 60);
-        if (cacheAgeHours > CACHE_TTL_HOURS) {
-          logger.warn('Кэш устарел (старше 24 часов), будет обновлён', {
-            cacheAgeHours: cacheAgeHours.toFixed(1),
-            ttlHours: CACHE_TTL_HOURS
-          });
-          /* БЫЛО:
-          console.log('⚠️  Кэш устарел (старше 24 часов), будет обновлён');
-          */
-          return { timestamp: 0, data: null, requests: cache.requests || 0 };
-        }
-        
-        const cacheTime = new Date(cache.timestamp).toLocaleString();
-        logger.info('Используется кэш', { timestamp: cacheTime });
-        /* БЫЛО:
-        console.log(`✅ Используется кэш от ${new Date(cache.timestamp).toLocaleString()}`);
-        */
-        return cache;
-      } else {
-        logger.info('Кэш файл не найден, создаётся новый');
-        /* БЫЛО:
-        console.log('📝 Кэш файл не найден, создаётся новый');
-        */
-        return { timestamp: 0, data: null, requests: 0 };
-      }
-    } catch (error) {
-      logger.error('Ошибка загрузки кэша', { 
-        error: error.message,
-        file: CACHE_FILE 
-      });
-      /* БЫЛО:
-      console.error('❌ Ошибка загрузки кэша:', error.message);
-      */
-      return { timestamp: 0, data: null, requests: 0 };
+    // Singleton pattern - если уже есть экземпляр, возвращаем его
+    if (OddsCacheManager.instance) {
+      return OddsCacheManager.instance;
     }
+    
+    // Инициализация нового экземпляра
+    OddsCacheManager.instance = this;
+    
+    // Загружаем конфигурацию
+    this.config = CACHE_CONFIG;
+    
+    // Инициализируем кэш
+    this.cache = {};
+    this.entries = 0;
+    this.totalSizeBytes = 0;
+    this.cleanupInterval = null;
+    
+    // Загружаем существующий кэш
+    this.load();
+    
+    // Запускаем периодическую очистку
+    this.startCleanupInterval();
+    
+    logger.info('OddsCacheManager инициализирован', {
+      singleton: true,
+      configLoaded: true
+    });
   }
 
-  // Сохранение кэша в файл
-  saveCache(data) {
+  // ================== ОСНОВНЫЕ МЕТОДЫ ==================
+
+  /**
+   * Определяет TTL для ключа на основе паттернов
+   * @param {string} key - Ключ кэша
+   * @returns {number} TTL в миллисекундах
+   */
+  determineTTL(key) {
+    const patterns = this.config.KEY_PATTERNS;
+    
+    for (const [type, regexes] of Object.entries(patterns)) {
+      for (const regex of regexes) {
+        if (regex.test(key)) {
+          return this.config.TTL[type] || this.config.DEFAULT_TTL;
+        }
+      }
+    }
+    
+    return this.config.DEFAULT_TTL;
+  }
+
+  /**
+   * Сохраняет значение в кэше с указанным TTL
+   * @param {string} key - Ключ
+   * @param {any} value - Значение
+   * @param {number} ttl - TTL в миллисекундах (если не указан, определяется автоматически)
+   * @returns {boolean} Успешно ли сохранено
+   */
+  set(key, value, ttl = null) {
     try {
-      const cache = {
+      const actualTTL = ttl || this.determineTTL(key);
+      const size = JSON.stringify(value).length;
+      
+      this.cache[key] = {
+        value,
         timestamp: Date.now(),
-        data: data,
-        requests: (this.cache.requests || 0) + 1
+        ttl: actualTTL,
+        size
       };
       
-      fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
-      this.cache = cache;
+      this.entries = Object.keys(this.cache).length;
+      this.totalSizeBytes += size;
       
-      logger.ok('Кэш сохранён', { 
-        timestamp: new Date().toISOString(),
-        eventCount: data?.length || 0,
-        requestCount: cache.requests 
+      // Автоматическое сохранение в файл
+      this.save();
+      
+      logger.debug('Запись сохранена в кэш', {
+        key,
+        ttlHours: (actualTTL / (1000 * 60 * 60)).toFixed(1),
+        sizeBytes: size,
+        totalEntries: this.entries
       });
-      /* БЫЛО:
-      console.log(`✅ Кэш сохранён: ${data?.length || 0} событий`);
-      */
+      
       return true;
     } catch (error) {
-      logger.error('Ошибка сохранения кэша', { 
-        error: error.message,
-        file: CACHE_FILE 
+      logger.error('Ошибка сохранения в кэш', {
+        key,
+        error: error.message
       });
-      /* БЫЛО:
-      console.error('❌ Ошибка сохранения кэша:', error.message);
-      */
       return false;
     }
   }
 
-  // Запрос к The Odds API
+  /**
+   * Получает значение из кэша с проверкой TTL
+   * @param {string} key - Ключ
+   * @returns {any|null} Значение или null если устарело/отсутствует
+   */
+  get(key) {
+    try {
+      const entry = this.cache[key];
+      
+      if (!entry) {
+        logger.debug('Запись не найдена в кэше', { key });
+        return null;
+      }
+      
+      const age = Date.now() - entry.timestamp;
+      const ttl = entry.ttl || this.config.DEFAULT_TTL;
+      
+      // Проверка срока действия
+      if (age > ttl) {
+        logger.debug('Запись устарела, удаляем', {
+          key,
+          ageHours: (age / (1000 * 60 * 60)).toFixed(1),
+          ttlHours: (ttl / (1000 * 60 * 60)).toFixed(1)
+        });
+        
+        delete this.cache[key];
+        this.entries--;
+        this.totalSizeBytes -= entry.size;
+        this.save();
+        
+        return null;
+      }
+      
+      logger.debug('Запись найдена в кэше', {
+        key,
+        ageHours: (age / (1000 * 60 * 60)).toFixed(1),
+        ttlHours: (ttl / (1000 * 60 * 60)).toFixed(1)
+      });
+      
+      return entry.value;
+    } catch (error) {
+      logger.error('Ошибка получения из кэша', {
+        key,
+        error: error.message
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Принудительное обновление записи
+   * @param {string} key - Ключ
+   * @returns {boolean} Успешно ли удалено
+   */
+  refresh(key) {
+    try {
+      if (this.cache[key]) {
+        const oldSize = this.cache[key].size;
+        delete this.cache[key];
+        this.entries--;
+        this.totalSizeBytes -= oldSize;
+        this.save();
+        
+        logger.debug('Запись удалена из кэша', { key });
+        return true;
+      }
+      return false;
+    } catch (error) {
+      logger.error('Ошибка обновления записи', {
+        key,
+        error: error.message
+      });
+      return false;
+    }
+  }
+
+  // ================== УПРАВЛЕНИЕ ФАЙЛАМИ ==================
+
+  /**
+   * Загрузка кэша из файла
+   */
+  load() {
+    try {
+      if (!fs.existsSync(CACHE_FILE)) {
+        logger.info('Файл кэша не найден, создаём новый');
+        this.cache = {};
+        this.entries = 0;
+        this.totalSizeBytes = 0;
+        return;
+      }
+      
+      const data = fs.readFileSync(CACHE_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      
+      // Валидация структуры
+      if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error('Неверный формат файла кэша');
+      }
+      
+      this.cache = parsed.cache || {};
+      this.entries = Object.keys(this.cache).length;
+      this.totalSizeBytes = parsed.totalSizeBytes || 0;
+      
+      // Очистка устаревших записей при загрузке
+      const cleaned = this.pruneExpiredEntries();
+      
+      logger.info('Кэш загружен из файла', {
+        entries: this.entries,
+        sizeMB: (this.totalSizeBytes / 1024 / 1024).toFixed(2),
+        cleanedEntries: cleaned
+      });
+      
+    } catch (error) {
+      logger.error('Ошибка загрузки кэша, создаём новый', {
+        error: error.message,
+        file: CACHE_FILE
+      });
+      
+      this.cache = {};
+      this.entries = 0;
+      this.totalSizeBytes = 0;
+    }
+  }
+
+  /**
+   * Сохранение кэша в файл
+   */
+  save() {
+    try {
+      const data = {
+        cache: this.cache,
+        totalSizeBytes: this.totalSizeBytes,
+        timestamp: Date.now(),
+        version: '1.1' // Версия формата с TTL
+      };
+      
+      fs.writeFileSync(CACHE_FILE, JSON.stringify(data, null, 2));
+      
+      logger.debug('Кэш сохранён в файл', {
+        entries: this.entries,
+        sizeMB: (this.totalSizeBytes / 1024 / 1024).toFixed(2)
+      });
+      
+      return true;
+    } catch (error) {
+      logger.error('Ошибка сохранения кэша', {
+        error: error.message,
+        file: CACHE_FILE
+      });
+      return false;
+    }
+  }
+
+  // ================== ОЧИСТКА И СТАТИСТИКА ==================
+
+  /**
+   * Удаление устаревших записей
+   * @returns {number} Количество удалённых записей
+   */
+  pruneExpiredEntries() {
+    const now = Date.now();
+    let deleted = 0;
+    
+    for (const [key, entry] of Object.entries(this.cache)) {
+      const age = now - entry.timestamp;
+      const ttl = entry.ttl || this.config.DEFAULT_TTL;
+      
+      if (age > ttl) {
+        delete this.cache[key];
+        deleted++;
+        this.totalSizeBytes -= entry.size;
+      }
+    }
+    
+    this.entries = Object.keys(this.cache).length;
+    
+    if (deleted > 0) {
+      logger.info('Устаревшие записи удалены', {
+        deleted,
+        remaining: this.entries
+      });
+      this.save();
+    }
+    
+    return deleted;
+  }
+
+  /**
+   * Запуск периодической очистки
+   */
+  startCleanupInterval() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    
+    this.cleanupInterval = setInterval(() => {
+      const deleted = this.pruneExpiredEntries();
+      if (deleted > 0) {
+        logger.debug('Периодическая очистка завершена', { deleted });
+      }
+    }, this.config.CLEANUP.INTERVAL);
+    
+    logger.debug('Интервал очистки запущен', {
+      intervalHours: (this.config.CLEANUP.INTERVAL / (1000 * 60 * 60)).toFixed(1)
+    });
+  }
+
+  /**
+   * Получение статистики кэша
+   * @returns {object} Статистика
+   */
+  stats() {
+    const entriesByType = {};
+    let oldestEntry = null;
+    let newestEntry = null;
+    
+    for (const [key, entry] of Object.entries(this.cache)) {
+      const type = this.determineTTL(key);
+      const typeName = Object.entries(this.config.TTL).find(([k, v]) => v === type)?.[0] || 'UNKNOWN';
+      
+      entriesByType[typeName] = (entriesByType[typeName] || 0) + 1;
+      
+      if (!oldestEntry || entry.timestamp < oldestEntry.timestamp) {
+        oldestEntry = { key, ...entry };
+      }
+      if (!newestEntry || entry.timestamp > newestEntry.timestamp) {
+        newestEntry = { key, ...entry };
+      }
+    }
+    
+    const stats = {
+      entries: this.entries,
+      sizeBytes: this.totalSizeBytes,
+      sizeMB: (this.totalSizeBytes / 1024 / 1024).toFixed(2),
+      entriesByType,
+      oldestEntry: oldestEntry ? {
+        key: oldestEntry.key,
+        ageHours: ((Date.now() - oldestEntry.timestamp) / (1000 * 60 * 60)).toFixed(1),
+        ttlHours: (oldestEntry.ttl / (1000 * 60 * 60)).toFixed(1)
+      } : null,
+      newestEntry: newestEntry ? {
+        key: newestEntry.key,
+        ageHours: ((Date.now() - newestEntry.timestamp) / (1000 * 60 * 60)).toFixed(1),
+        ttlHours: (newestEntry.ttl / (1000 * 60 * 60)).toFixed(1)
+      } : null,
+      memory: process.memoryUsage()
+    };
+    
+    return stats;
+  }
+
+  // ================== API МЕТОДЫ (обратная совместимость) ==================
+
+  /**
+   * Получение коэффициентов с кэшированием (совместимость)
+   */
+  async getTennisOdds(forceRefresh = false) {
+    const cacheKey = 'odds_today';
+    
+    // Если есть актуальные данные в кэше и не требуется обновление
+    if (!forceRefresh) {
+      const cached = this.get(cacheKey);
+      if (cached) {
+        logger.info('Используем кэшированные коэффициенты', {
+          eventCount: cached.length
+        });
+        return cached;
+      }
+    }
+    
+    logger.info('Запрашиваем обновление данных с API', { forceRefresh });
+    
+    try {
+      const events = await this.fetchFromAPI();
+      
+      if (!events || events.length === 0) {
+        logger.warn('API вернул пустой ответ');
+        return [];
+      }
+      
+      // Сохраняем с TTL для живых коэффициентов
+      this.set(cacheKey, events, this.config.TTL.ODDS_LIVE);
+      
+      return events;
+    } catch (error) {
+      logger.error('Ошибка получения коэффициентов', {
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Запрос к The Odds API
+   */
   fetchFromAPI() {
     logger.info('Запрос к The Odds API');
-    /* БЫЛО:
-    console.log('🌐 Запрос к The Odds API...');
-    */
     
     return new Promise((resolve, reject) => {
       const params = new URLSearchParams({
@@ -141,7 +437,7 @@ class OddsCacheManager {
       const options = {
         hostname: 'api.the-odds-api.com',
         path: `/v4/sports/tennis/odds?${params.toString()}`,
-        headers: { 'User-Agent': 'TennisBettingAI/1.5-cached' }
+        headers: { 'User-Agent': 'TennisBettingAI/1.5-cached-optimized' }
       };
 
       const req = https.get(options, (res) => {
@@ -152,26 +448,16 @@ class OddsCacheManager {
           try {
             const events = JSON.parse(data);
             
-            // FIX: Проверка пустого ответа API
             if (!events || events.length === 0) {
-              logger.warn('API вернул пустой ответ', { status: 'empty' });
-              /* БЫЛО:
-              console.log('📭 Нет данных в ответе API');
-              */
+              logger.warn('API вернул пустой ответ');
               resolve([]);
               return;
             }
             
             logger.info('Данные получены от API', { eventCount: events.length });
-            /* БЫЛО:
-            console.log(`✅ Получено ${events.length} событий`);
-            */
             resolve(events);
           } catch (err) {
             logger.error('Ошибка парсинга данных API', { error: err.message });
-            /* БЫЛО:
-            console.error('❌ Ошибка парсинга данных:', err.message);
-            */
             reject(err);
           }
         });
@@ -179,9 +465,6 @@ class OddsCacheManager {
 
       req.on('error', (err) => {
         logger.error('Ошибка сетевого запроса', { error: err.message });
-        /* БЫЛО:
-        console.error('❌ Ошибка запроса:', err.message);
-        */
         reject(err);
       });
 
@@ -189,175 +472,101 @@ class OddsCacheManager {
         req.destroy();
         const timeoutError = new Error('Таймаут запроса к The Odds API');
         logger.error('Таймаут запроса', { error: timeoutError.message });
-        /* БЫЛО:
-        reject(new Error('Таймаут запроса к The Odds API'));
-        */
         reject(timeoutError);
       });
     });
   }
 
-  // Получение коэффициентов с кэшированием
-  async getTennisOdds(forceRefresh = false) {
-    try {
-      // Если есть актуальные данные в кэше и не требуется обновление
-      if (this.cache.data && !forceRefresh) {
-        const cacheAgeHours = (Date.now() - this.cache.timestamp) / (1000 * 60 * 60);
-        if (cacheAgeHours < CACHE_TTL_HOURS) {
-          logger.debug('Используем кэшированные данные', { 
-            cacheAgeHours: cacheAgeHours.toFixed(1),
-            ttlHours: CACHE_TTL_HOURS,
-            eventCount: this.cache.data?.length || 0 
-          });
-          /* БЫЛО:
-          console.log(`♻️  Используем кэшированные данные (возраст: ${cacheAgeHours.toFixed(1)} часов)`);
-          */
-          return this.cache.data;
-        }
-      }
-
-      logger.info('Запрашиваем обновление данных с API', { forceRefresh });
-      /* БЫЛО:
-      console.log(forceRefresh ? '🔄 Принудительное обновление...' : '🔄 Обновляем данные...');
-      */
-
-      // Получаем данные от API
-      const events = await this.fetchFromAPI();
-      
-      if (!events || events.length === 0) {
-        logger.warn('API вернул пустой ответ, используем старый кэш если есть', { 
-          cacheAvailable: !!this.cache.data 
-        });
-        /* БЫЛО:
-        console.log('⚠️  API вернул пустой ответ, используем старый кэш если есть');
-        */
-        return this.cache.data || [];
-      }
-
-      // Сохраняем в кэш
-      this.saveCache(events);
-      
-      return events;
-
-    } catch (error) {
-      logger.error('Ошибка получения коэффициентов', { 
-        error: error.message,
-        cacheAvailable: !!this.cache.data 
-      });
-      /* БЫЛО:
-      console.error('❌ Ошибка получения коэффициентов:', error.message);
-      */
-      
-      // В случае ошибки возвращаем старые данные из кэша (если есть)
-      if (this.cache.data) {
-        logger.warn('Используем старый кэш из-за ошибки', { 
-          eventCount: this.cache.data.length,
-          cacheAgeHours: this.cache.timestamp ? 
-            ((Date.now() - this.cache.timestamp) / (1000 * 60 * 60)).toFixed(1) : 'unknown' 
-        });
-        /* БЫЛО:
-        console.log('⚠️  Используем старый кэш из-за ошибки');
-        */
-        return this.cache.data;
-      }
-      
-      logger.error('Нет кэша для отката', { status: 'no_fallback' });
-      /* БЫЛО:
-      console.error('❌ Нет кэша для отката');
-      */
-      throw error;
-    }
-  }
-
-  // Получение статистики кэша
-  getStats() {
-    const cacheAgeMs = Date.now() - this.cache.timestamp;
-    const cacheAgeHours = cacheAgeMs / (1000 * 60 * 60);
-    
-    const stats = {
-      cacheAgeHours: cacheAgeHours.toFixed(1),
-      requestsCount: this.cache.requests || 0,
-      dataCount: this.cache.data?.length || 0,
-      isExpired: cacheAgeHours > CACHE_TTL_HOURS,
-      nextRefreshInHours: Math.max(0, CACHE_TTL_HOURS - cacheAgeHours).toFixed(1)
-    };
-    
-    logger.debug('Статистика кэша', stats);
-    /* БЫЛО:
-    console.log(`📊 Статистика кэша: возраст ${stats.cacheAgeHours} часов, запросов: ${stats.requestsCount}`);
-    */
-    
-    return stats;
-  }
-
-  // Очистка кэша
+  /**
+   * Очистка кэша
+   */
   clearCache() {
     try {
       if (fs.existsSync(CACHE_FILE)) {
         fs.unlinkSync(CACHE_FILE);
-        this.cache = { timestamp: 0, data: null, requests: 0 };
-        logger.ok('Кэш очищен');
-        /* БЫЛО:
-        console.log('🗑️  Кэш очищен');
-        */
-        return true;
       }
-      logger.info('Кэш уже пустой');
-      /* БЫЛО:
-      console.log('📭 Кэш уже пустой');
-      */
+      
+      this.cache = {};
+      this.entries = 0;
+      this.totalSizeBytes = 0;
+      
+      logger.ok('Кэш полностью очищен');
       return true;
     } catch (error) {
       logger.error('Ошибка очистки кэша', { error: error.message });
-      /* БЫЛО:
-      console.error('❌ Ошибка очистки кэша:', error.message);
-      */
       return false;
     }
   }
 }
 
-// Главная функция для тестирования
-async function testCacheManager() {
-  logger.info('Тестирование OddsCacheManager');
-  /* БЫЛО:
-  console.log('🧪 Тестирование OddsCacheManager...');
-  */
+// ================== CLI ИНТЕРФЕЙС ==================
+
+/**
+ * Главная функция для тестирования и CLI
+ */
+async function main() {
+  const args = process.argv.slice(2);
+  const command = args[0] || 'test';
   
   const cacheManager = new OddsCacheManager();
   
-  try {
-    // Получаем коэффициенты
-    const events = await cacheManager.getTennisOdds();
-    
-    // Получаем статистику
-    const stats = cacheManager.getStats();
-    
-    logger.ok('Тест завершён успешно', { 
-      eventCount: events?.length || 0,
-      stats 
-    });
-    /* БЫЛО:
-    console.log(`✅ Тест завершён: ${events?.length || 0} событий`);
-    */
-    
-    return events;
-  } catch (error) {
-    logger.error('Тест завершился ошибкой', { error: error.message });
-    /* БЫЛО:
-    console.error('❌ Тест завершился ошибкой:', error.message);
-    */
-    throw error;
+  switch (command) {
+    case 'stats':
+      const stats = cacheManager.stats();
+      console.log('📊 Статистика кэша:');
+      console.log(JSON.stringify(stats, null, 2));
+      break;
+      
+    case 'clear':
+      const cleared = cacheManager.clearCache();
+      console.log(cleared ? '✅ Кэш очищен' : '❌ Ошибка очистки');
+      break;
+      
+    case 'refresh':
+      if (args[1]) {
+        const refreshed = cacheManager.refresh(args[1]);
+        console.log(refreshed ? `✅ Запись "${args[1]}" обновлена` : `❌ Запись "${args[1]}" не найдена`);
+      } else {
+        console.log('❌ Укажите ключ: node odds-cache-manager.js refresh <key>');
+      }
+      break;
+      
+    case 'test':
+    default:
+      logger.info('Тестирование OddsCacheManager');
+      
+      try {
+        // Тест базовых операций
+        console.log('🧪 Тест 1: Сохранение и получение записи...');
+        cacheManager.set('test_key', { data: 'test_value' });
+        const retrieved = cacheManager.get('test_key');
+        console.log(retrieved ? '✅ Тест пройден' : '❌ Тест не пройден');
+        
+        // Тест статистики
+        console.log('🧪 Тест 2: Статистика...');
+        const stats = cacheManager.stats();
+        console.log(`📊 Записей: ${stats.entries}, Размер: ${stats.sizeMB} MB`);
+        
+        // Тест API (опционально)
+        if (process.env.TEST_API === 'true') {
+          console.log('🧪 Тест 3: API запрос...');
+          const events = await cacheManager.getTennisOdds();
+          console.log(`📊 Получено событий: ${events?.length || 0}`);
+        }
+        
+        console.log('✅ Все тесты завершены');
+      } catch (error) {
+        console.error('❌ Ошибка тестирования:', error.message);
+        process.exit(1);
+      }
+      break;
   }
 }
 
 // Если файл запущен напрямую
 if (require.main === module) {
-  testCacheManager().catch(error => {
-    logger.error('Необработанная ошибка в тесте', { error: error.message });
-    /* БЫЛО:
+  main().catch(error => {
     console.error('❌ Необработанная ошибка:', error.message);
-    */
     process.exit(1);
   });
 }

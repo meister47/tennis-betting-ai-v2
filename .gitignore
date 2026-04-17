@@ -58,3 +58,7 @@ ENV/
 *.dll
 *.bin
 *.dat
+# Backup files
+*.backup
+*backup*
+
