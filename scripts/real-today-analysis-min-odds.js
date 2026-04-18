@@ -144,37 +144,34 @@ async function fetchRealOdds(forceRefresh = false) {
 // 2. Прямой запрос к API (fallback)
 function fetchDirectOdds() {
   logger.warn('Fallback: прямой запрос к API');
-  /* БЫЛО:
-  console.log('⚠️  Fallback: прямой запрос к API...');
-  */
   
-  // Импортируем старую функцию (если нужно)
   const https = require('https');
-  const API_KEY = process.env.THE_ODDS_API_KEY;
-if (!API_KEY) {
-  logger.error('THE_ODDS_API_KEY не установлен в переменных окружения', { 
-    error: 'Создайте файл .env.local с ключом (см. SETUP_SECURITY.md)' 
-  });
-  /* БЫЛО:
-  console.error('❌ THE_ODDS_API_KEY не установлен в переменных окружения');
-  console.error('   Создайте файл .env.local с ключом (см. SETUP_SECURITY.md)');
-  */
-  process.exit(1);
-}
+  const API_CONFIG = require('../config/api-config');
+  
+  let activeApi;
+  try {
+    activeApi = API_CONFIG.getActiveApi();
+    logger.info('Прямой запрос к API', { api: activeApi.NAME });
+  } catch (error) {
+    logger.error('Не удалось определить API для прямого запроса', { error: error.message });
+    process.exit(1);
+  }
   
   return new Promise((resolve, reject) => {
+    const sport = activeApi.NAME === 'Odds-API.io' ? 'tennis_atp' : 'tennis';
     const params = new URLSearchParams({
-      apiKey: API_KEY,
-      regions: 'eu',
-      markets: 'h2h',
-      oddsFormat: 'decimal',
-      dateFormat: 'iso'
+      apiKey: activeApi.KEY,
+      regions: activeApi.REGIONS,
+      markets: activeApi.MARKETS,
+      oddsFormat: activeApi.ODDS_FORMAT,
+      dateFormat: activeApi.DATE_FORMAT
     });
 
+    const hostname = new URL(activeApi.BASE_URL).hostname;
     const options = {
-      hostname: 'api.the-odds-api.com',
-      path: `/v4/sports/tennis/odds?${params.toString()}`,
-      headers: { 'User-Agent': 'TennisBettingAI/1.5-cached' }
+      hostname: hostname,
+      path: `/v4/sports/${sport}/odds?${params.toString()}`,
+      headers: { 'User-Agent': 'TennisBettingAI/2.0-direct-fallback' }
     };
 
     const req = https.get(options, (res) => {
@@ -184,47 +181,44 @@ if (!API_KEY) {
       res.on('end', () => {
         try {
           const events = JSON.parse(data);
-          logger.info('Получены события (fallback)', { eventCount: events.length });
-          /* БЫЛО:
-          console.log(`✅ Получено ${events.length} событий (fallback)`);
-          */
+          logger.info('Получены события (fallback)', { 
+            api: activeApi.NAME,
+            eventCount: events.length 
+          });
           
           // FIX: Добавлена проверка пустого ответа API
           if (!events || events.length === 0) {
-            logger.info('Нет матчей для анализа сегодня (fallback)');
-            /* БЫЛО:
-            console.log('📭 Нет матчей для анализа сегодня (fallback)')
-            */
+            logger.info('Нет матчей для анализа сегодня (fallback)', { api: activeApi.NAME });
             resolve([]);
             return;
           }
           
           resolve(events);
         } catch (err) {
-          logger.error('Ошибка парсинга данных', { error: err.message });
-          /* БЫЛО:
-          console.error('❌ Ошибка парсинга данных:', err.message);
-          */
+          logger.error('Ошибка парсинга данных', { 
+            api: activeApi.NAME,
+            error: err.message 
+          });
           reject(err);
         }
       });
     });
 
     req.on('error', (err) => {
-      logger.error('Ошибка запроса', { error: err.message });
-      /* БЫЛО:
-      console.error('❌ Ошибка запроса:', err.message);
-      */
+      logger.error('Ошибка запроса', { 
+        api: activeApi.NAME,
+        error: err.message 
+      });
       reject(err);
     });
 
     req.setTimeout(15000, () => {
       req.destroy();
-      const timeoutError = new Error('Таймаут запроса к The Odds API');
-      logger.error('Таймаут запроса', { error: timeoutError.message });
-      /* БЫЛО:
-      reject(new Error('Таймаут запроса к The Odds API'));
-      */
+      const timeoutError = new Error(`Таймаут запроса к ${activeApi.NAME}`);
+      logger.error('Таймаут запроса', { 
+        api: activeApi.NAME,
+        error: timeoutError.message 
+      });
       reject(timeoutError);
     });
   });
@@ -285,15 +279,17 @@ function getEstimatedProbability(playerName, opponentName, tournamentRisk) {
 }
 
 // 8. Оценка уверенности по edge с историческими оптимизациями
-function getConfidence(edge, odds, tournamentName) {
+function getConfidence(edge, odds, tournamentName, surface, playerName, opponentName) {
   const baseConfidence = edge;
   
   // Применяем исторические оптимизации
   const confidenceResult = HistoricalOptimizations.calculateConfidence(
     baseConfidence,
     odds,
-    null, // surface - неизвестно
-    tournamentName
+    surface,
+    tournamentName,
+    playerName,
+    opponentName
   );
   
   const adjustedConfidence = confidenceResult.adjusted;
@@ -318,6 +314,21 @@ async function analyzeMatches() {
   console.log(`📅 Дата: ${TODAY}`);
   console.log('='.repeat(50));
   */
+  
+  // Инициализация статистики фильтров
+  const filterStats = {
+    total_analyzed: 0,
+    total_passed: 0,
+    total_blocked: 0,
+    rank_filter: 0,
+    tournament_tier_filter: 0,
+    rank_diff_filter: 0,
+    optimal_odds_filter: 0,
+    min_odds_filter: 0,
+    max_odds_filter: 0,
+    edge_filter: 0,
+    probability_filter: 0
+  };
   
   try {
     // Получаем коэффициенты
@@ -434,7 +445,12 @@ async function analyzeMatches() {
         
         for (const player of players) {
           // Проверяем минимальный коэффициент
+          // Увеличиваем счетчик анализируемых ставок
+          filterStats.total_analyzed++;
+          
           if (player.odds < USER_CONFIG.minOdds) {
+            filterStats.min_odds_filter++;
+            filterStats.total_blocked++;
             logger.skip('Коэффициент слишком низкий', { 
               matchId: event.id, 
               player: player.name, 
@@ -449,6 +465,8 @@ async function analyzeMatches() {
           
           // Проверяем максимальный коэффициент
           if (player.odds > USER_CONFIG.maxOdds) {
+            filterStats.max_odds_filter++;
+            filterStats.total_blocked++;
             logger.skip('Коэффициент слишком высокий', { 
               matchId: event.id, 
               player: player.name, 
@@ -467,6 +485,8 @@ async function analyzeMatches() {
           
           // Проверяем минимальную вероятность
           if (estimatedProbability < USER_CONFIG.minWinProbability) {
+            filterStats.probability_filter++;
+            filterStats.total_blocked++;
             logger.skip('Слишком низкая вероятность победы', { 
               matchId: event.id, 
               player: player.name, 
@@ -495,6 +515,8 @@ async function analyzeMatches() {
           
           // Проверяем минимальный edge
           if (edge < USER_CONFIG.minEdge) {
+            filterStats.edge_filter++;
+            filterStats.total_blocked++;
             logger.skip('Edge слишком низкий', { 
               matchId: event.id, 
               player: player.name, 
@@ -516,8 +538,63 @@ async function analyzeMatches() {
             USER_CONFIG.maxStake
           );
           
-          // Получаем уверенность
-          const confidence = getConfidence(edge, player.odds, tournamentName);
+          // Получаем уверенность с проверкой игроков
+          const confidence = getConfidence(
+            edge, 
+            player.odds, 
+            tournamentName,
+            surface,
+            player.name,
+            opponentName
+          );
+          
+          // НОВОЕ: Применяем дополнительные фильтры на основе анализа 2644 матчей ATP 2025
+          if (confidence !== '🚫 БЛОКИРОВАНА') {
+            // Подготавливаем данные матча для дополнительных фильтров
+            const matchData = {
+              player1: {
+                name: player.name,
+                rank: HistoricalOptimizations.getPlayerRank(player.name)
+              },
+              player2: {
+                name: opponentName,
+                rank: HistoricalOptimizations.getPlayerRank(opponentName)
+              },
+              tournament: {
+                name: tournamentName,
+                tier: HistoricalOptimizations.getTournamentTier(tournamentName)
+              }
+            };
+            
+            // Применяем дополнительные фильтры
+            const filterResult = HistoricalOptimizations.applyAdditionalFilters(
+              matchData, 
+              player.odds, 
+              player.name
+            );
+            
+            if (!filterResult.allowed) {
+              // Увеличиваем счетчик соответствующего фильтра
+              if (filterResult.filter && filterStats[filterResult.filter] !== undefined) {
+                filterStats[filterResult.filter]++;
+                filterStats.total_blocked++;
+              }
+              
+              logger.skip(`Дополнительный фильтр: ${filterResult.reason}`, { 
+                matchId: event.id, 
+                player: player.name, 
+                odds: player.odds,
+                filter: filterResult.filter,
+                rank1: matchData.player1.rank,
+                rank2: matchData.player2.rank,
+                tournamentTier: matchData.tournament.tier
+              });
+              continue;
+            }
+          }
+          
+          // Если дошли сюда, ставка прошла все фильтры
+          filterStats.total_passed++;
           
           // Формируем рекомендацию
           const recommendation = {
@@ -577,12 +654,16 @@ async function analyzeMatches() {
     console.log(`   Рекомендаций: ${recommendations.length}`);
     */
     
+    // НОВОЕ: Логируем статистику фильтров
+    HistoricalOptimizations.logFilterStats(filterStats);
+    
     return {
       recommendations,
       stats: {
         totalEvents: allEvents.length,
         filtered: todayEvents.length,
-        bets: recommendations.length
+        bets: recommendations.length,
+        filterStats: filterStats // НОВОЕ: включаем статистику фильтров в результат
       }
     };
     

@@ -26,16 +26,36 @@ const path = require('path');
 // Загружаем конфигурацию
 require('dotenv').config({ path: path.join(__dirname, '..', '.env.local') });
 
+// Загружаем конфигурацию API
+const ODDS_API_IO_KEY = process.env.ODDS_API_IO_KEY;
 const THE_ODDS_API_KEY = process.env.THE_ODDS_API_KEY;
+const USE_ODDS_API_IO = process.env.USE_ODDS_API_IO === 'true' || false;
 const CLV_MODE_ENABLED = process.env.CLV_MODE_ENABLED === 'true' || false;
 const CLV_DRY_RUN = process.env.CLV_DRY_RUN === 'true' || false;
 const CLV_TIME_WINDOW_MINUTES = parseInt(process.env.CLV_TIME_WINDOW_MINUTES) || 20;
 
-// Odds-API конфигурация
-const ODDS_API_BASE_URL = 'https://api.the-odds-api.com/v4';
-const SPORT = 'tennis_atp'; // ATP теннис
-const REGIONS = 'eu'; // Европейский регион
-const MARKETS = 'h2h'; // Победа (head-to-head)
+// Настройки API (используем Odds-API.io по умолчанию)
+const ODDS_API_CONFIG = {
+  // Odds-API.io (новый основной)
+  io: {
+    BASE_URL: 'https://api.the-odds-api.io/v4',
+    SPORT: 'tennis_atp',
+    REGIONS: 'eu',
+    MARKETS: 'h2h',
+    KEY: ODDS_API_IO_KEY
+  },
+  // The-Odds-API.com (старый, для совместимости)
+  com: {
+    BASE_URL: 'https://api.the-odds-api.com/v4',
+    SPORT: 'tennis_atp',
+    REGIONS: 'eu',
+    MARKETS: 'h2h',
+    KEY: THE_ODDS_API_KEY
+  }
+};
+
+// Выбираем активный API на основе конфигурации
+const ACTIVE_API = USE_ODDS_API_IO ? 'io' : 'com';
 
 class ClosingOddsCapture {
   constructor() {
@@ -55,44 +75,64 @@ class ClosingOddsCapture {
    */
   async fetchCurrentOdds(matchId) {
     try {
-      if (!THE_ODDS_API_KEY) {
-        logger.error('THE_ODDS_API_KEY не установлен');
-        /* БЫЛО:
-        console.error('❌ THE_ODDS_API_KEY не установлен в переменных окружения');
-        */
-        return null;
+      const apiConfig = ODDS_API_CONFIG[ACTIVE_API];
+      const apiKey = apiConfig.KEY;
+      
+      if (!apiKey) {
+        logger.error(`Ключ API не установлен для ${ACTIVE_API === 'io' ? 'Odds-API.io' : 'The-Odds-API.com'}`);
+        // Пробуем переключиться на альтернативный API
+        const altApi = ACTIVE_API === 'io' ? 'com' : 'io';
+        const altConfig = ODDS_API_CONFIG[altApi];
+        const altApiKey = altConfig.KEY;
+        
+        if (!altApiKey) {
+          logger.error('Оба ключа API отсутствуют!');
+          return null;
+        }
+        
+        logger.info(`Переключаемся на альтернативный API: ${altApi === 'io' ? 'Odds-API.io' : 'The-Odds-API.com'}`);
+        return await this.fetchCurrentOddsWithApi(matchId, altApi, altConfig);
       }
-
-      const url = `${ODDS_API_BASE_URL}/sports/${SPORT}/events/${matchId}/odds`;
+      
+      return await this.fetchCurrentOddsWithApi(matchId, ACTIVE_API, apiConfig);
+    } catch (error) {
+      logger.error('Критическая ошибка в fetchCurrentOdds', { matchId, error: error.message });
+      return null;
+    }
+  }
+  
+  /**
+   * Вспомогательный метод для запроса к конкретному API
+   */
+  async fetchCurrentOddsWithApi(matchId, apiName, apiConfig) {
+    try {
+      const url = `${apiConfig.BASE_URL}/sports/${apiConfig.SPORT}/events/${matchId}/odds`;
       const params = {
-        apiKey: THE_ODDS_API_KEY,
-        regions: REGIONS,
-        markets: MARKETS
+        apiKey: apiConfig.KEY,
+        regions: apiConfig.REGIONS,
+        markets: apiConfig.MARKETS
       };
 
-      logger.info('Запрос коэффициентов для матча', { matchId });
-      /* БЫЛО:
-      console.log(`🔍 Запрос коэффициентов для матча ${matchId}...`);
-      */
+      logger.info('Запрос коэффициентов для матча', { 
+        matchId, 
+        api: apiName === 'io' ? 'Odds-API.io' : 'The-Odds-API.com',
+        url: `${apiConfig.BASE_URL}/sports/${apiConfig.SPORT}/events/{id}/odds`
+      });
 
       const response = await this.httpClient.get(url, { params });
       
       if (!response.data) {
-        logger.warn('Нет данных в ответе API', { matchId });
-        /* БЫЛО:
-        console.log(`⚠️  Нет данных в ответе API для матча ${matchId}`);
-        */
+        logger.warn('Нет данных в ответе API', { matchId, api: apiName });
         return null;
       }
 
       logger.info('Коэффициенты получены', { 
         matchId, 
+        api: apiName === 'io' ? 'Odds-API.io' : 'The-Odds-API.com',
         homeTeam: response.data.home_team,
-        awayTeam: response.data.away_team 
+        awayTeam: response.data.away_team,
+        eventType: response.data.sport_key
       });
-      /* БЫЛО:
-      console.log(`✅ Коэффициенты получены: ${response.data.home_team} vs ${response.data.away_team}`);
-      */
 
       return response.data;
     } catch (error) {
@@ -100,24 +140,24 @@ class ClosingOddsCapture {
         // API вернул ошибку
         logger.error('Ошибка API', { 
           matchId, 
+          api: apiName === 'io' ? 'Odds-API.io' : 'The-Odds-API.com',
           status: error.response.status,
-          statusText: error.response.statusText 
+          statusText: error.response.statusText
         });
-        /* БЫЛО:
-        console.error(`❌ API ошибка ${error.response.status} для матча ${matchId}: ${error.response.statusText}`);
-        */
       } else if (error.request) {
         // Не было ответа от сервера
-        logger.error('Нет ответа от сервера', { matchId, error: error.message });
-        /* БЫЛО:
-        console.error(`❌ Нет ответа от сервера для матча ${matchId}: ${error.message}`);
-        */
+        logger.error('Нет ответа от сервера', { 
+          matchId, 
+          api: apiName === 'io' ? 'Odds-API.io' : 'The-Odds-API.com',
+          error: error.message 
+        });
       } else {
         // Ошибка конфигурации
-        logger.error('Ошибка запроса', { matchId, error: error.message });
-        /* БЫЛО:
-        console.error(`❌ Ошибка запроса для матча ${matchId}: ${error.message}`);
-        */
+        logger.error('Ошибка запроса', { 
+          matchId, 
+          api: apiName === 'io' ? 'Odds-API.io' : 'The-Odds-API.com',
+          error: error.message 
+        });
       }
       return null;
     }

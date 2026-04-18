@@ -6,22 +6,32 @@
  * Дифференцированные TTL и singleton паттерн
  */
 
+// ================== ЗАГРУЗКА .ENV ==================
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') });
+
 // ================== ИНИЦИАЛИЗАЦИЯ ЛОГГЕРА ==================
 const Logger = require('../src/logger');
 const logger = new Logger('cache');
 
 // ================== ИМПОРТ КОНФИГУРАЦИИ ==================
 const CACHE_CONFIG = require('../config/cache-config');
+const API_CONFIG = require('../config/api-config');
 
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
 
-const API_KEY = process.env.THE_ODDS_API_KEY;
-if (!API_KEY) {
-  logger.error('THE_ODDS_API_KEY не установлен в переменных окружения', {
-    error: 'Создайте файл .env.local с ключом (см. SETUP_SECURITY.md)'
+// Получаем активный API
+let activeApi = null;
+try {
+  activeApi = API_CONFIG.getActiveApi();
+  logger.info('Активный API определен', { 
+    api: activeApi.NAME,
+    key_present: !!activeApi.KEY,
+    base_url: activeApi.BASE_URL
   });
+} catch (error) {
+  logger.error('Ошибка определения API', { error: error.message });
   process.exit(1);
 }
 
@@ -420,24 +430,26 @@ class OddsCacheManager {
   }
 
   /**
-   * Запрос к The Odds API
+   * Запрос к Odds API (использует активный API)
    */
   fetchFromAPI() {
-    logger.info('Запрос к The Odds API');
+    const api = activeApi;
+    logger.info('Запрос к API', { api: api.NAME });
     
     return new Promise((resolve, reject) => {
       const params = new URLSearchParams({
-        apiKey: API_KEY,
-        regions: 'eu',
-        markets: 'h2h',
-        oddsFormat: 'decimal',
-        dateFormat: 'iso'
+        apiKey: api.KEY,
+        regions: api.REGIONS,
+        markets: api.MARKETS,
+        oddsFormat: api.ODDS_FORMAT,
+        dateFormat: api.DATE_FORMAT
       });
 
+      const sportsPart = api.NAME === 'Odds-API.io' ? 'tennis_atp' : 'tennis';
       const options = {
-        hostname: 'api.the-odds-api.com',
-        path: `/v4/sports/tennis/odds?${params.toString()}`,
-        headers: { 'User-Agent': 'TennisBettingAI/1.5-cached-optimized' }
+        hostname: new URL(api.BASE_URL).hostname,
+        path: `/v4/sports/${sportsPart}/odds?${params.toString()}`,
+        headers: { 'User-Agent': 'TennisBettingAI/2.0-with-odds-api-io' }
       };
 
       const req = https.get(options, (res) => {
@@ -449,29 +461,41 @@ class OddsCacheManager {
             const events = JSON.parse(data);
             
             if (!events || events.length === 0) {
-              logger.warn('API вернул пустой ответ');
+              logger.warn('API вернул пустой ответ', { api: api.NAME });
               resolve([]);
               return;
             }
             
-            logger.info('Данные получены от API', { eventCount: events.length });
+            logger.info('Данные получены от API', { 
+              api: api.NAME,
+              eventCount: events.length
+            });
             resolve(events);
           } catch (err) {
-            logger.error('Ошибка парсинга данных API', { error: err.message });
+            logger.error('Ошибка парсинга данных API', { 
+              api: api.NAME,
+              error: err.message
+            });
             reject(err);
           }
         });
       });
 
       req.on('error', (err) => {
-        logger.error('Ошибка сетевого запроса', { error: err.message });
+        logger.error('Ошибка сетевого запроса', { 
+          api: api.NAME,
+          error: err.message
+        });
         reject(err);
       });
 
       req.setTimeout(15000, () => {
         req.destroy();
-        const timeoutError = new Error('Таймаут запроса к The Odds API');
-        logger.error('Таймаут запроса', { error: timeoutError.message });
+        const timeoutError = new Error(`Таймаут запроса к ${api.NAME}`);
+        logger.error('Таймаут запроса', { 
+          api: api.NAME,
+          error: timeoutError.message
+        });
         reject(timeoutError);
       });
     });
