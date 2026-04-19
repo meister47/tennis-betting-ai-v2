@@ -119,7 +119,7 @@ async function fetchRealOdds(forceRefresh = false) {
     const events = await cacheManager.getTennisOdds(forceRefresh);
     
     // Получаем статистику кэша
-    const stats = cacheManager.getStats();
+    const stats = cacheManager.stats();
     logger.info('Кэш статистика', stats);
     /* БЫЛО:
     console.log(`✅ Кэш: возраст ${stats.cacheAgeHours} часов, запросов: ${stats.requestsCount}`);
@@ -158,7 +158,20 @@ function fetchDirectOdds() {
   }
   
   return new Promise((resolve, reject) => {
-    const sport = activeApi.NAME === 'Odds-API.io' ? 'tennis_atp' : 'tennis';
+    // Для The-Odds-API.com используем конкретные теннисные турниры
+    let sportKey = 'tennis';
+    if (activeApi.NAME === 'The-Odds-API.com') {
+      // Получаем все теннисные турниры
+      const tennisSports = [
+        'tennis_atp_barcelona_open',
+        'tennis_atp_munich',
+        'tennis_wta_stuttgart_open'
+      ];
+      
+      // Будем запрашивать первый турнир как пример
+      sportKey = tennisSports[0];
+    }
+    
     const params = new URLSearchParams({
       apiKey: activeApi.KEY,
       regions: activeApi.REGIONS,
@@ -167,10 +180,20 @@ function fetchDirectOdds() {
       dateFormat: activeApi.DATE_FORMAT
     });
 
+    // Разные пути для разных API
+    let path;
+    if (activeApi.NAME === 'Odds-API.io') {
+      // Odds-API.io: /v3/events?sport=tennis&...
+      path = `/v3/events?sport=tennis&${params.toString()}`;
+    } else {
+      // The-Odds-API.com: /v4/sports/{sportKey}/odds?..
+      path = `/v4/sports/${sportKey}/odds?${params.toString()}`;
+    }
+    
     const hostname = new URL(activeApi.BASE_URL).hostname;
     const options = {
       hostname: hostname,
-      path: `/v4/sports/${sport}/odds?${params.toString()}`,
+      path: path,
       headers: { 'User-Agent': 'TennisBettingAI/2.0-direct-fallback' }
     };
 
@@ -363,7 +386,7 @@ async function analyzeMatches() {
     }
     
     // Инициализируем детектор поверхности
-    const surfaceDetector = new SurfaceDetector();
+    // SurfaceDetector использует статические методы, не требует инстанциирования
     
     // Анализируем каждый матч
     const recommendations = [];
@@ -435,7 +458,7 @@ async function analyzeMatches() {
         const awayOdds = awayOutcome.price;
         
         // Определяем тип поверхности
-        const surface = await surfaceDetector.detectSurface(event);
+        const surface = await SurfaceDetector.detectSurface(event);
         
         // Анализируем каждого игрока
         const players = [
@@ -504,7 +527,7 @@ async function analyzeMatches() {
           
           // Применяем динамический edge если включено
           if (USER_CONFIG.useDynamicEdge) {
-            const dynamicEdgeResult = DynamicEdgeConfig.calculateDynamicEdge(
+            const dynamicEdgeResult = DynamicEdgeConfig.calculateMinEdge(
               edge,
               player.odds,
               surface,
